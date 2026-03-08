@@ -1,0 +1,325 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI Usage Proxy",
+    "summary": "Cached proxy for AI provider usage data",
+    "description": "A cached proxy for AI provider usage data. One proxy, multiple providers. Currently supports Anthropic subscription users (Claude Max, OAuth). Planned: Anthropic API key, Google Gemini, OpenAI. Consolidates all usage requests through cached endpoints to avoid rate-limiting upstream APIs.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "James Prnich",
+      "url": "https://github.com/jamesprnich/claude-usage-proxy-spec"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    }
+  },
+  "externalDocs": {
+    "description": "Specification repository",
+    "url": "https://github.com/jamesprnich/claude-usage-proxy-spec"
+  },
+  "servers": [
+    {
+      "url": "{baseUrl}",
+      "description": "Proxy host",
+      "variables": {
+        "baseUrl": {
+          "default": "http://localhost:8090",
+          "description": "Base URL of the proxy server"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "usage",
+      "description": "AI provider usage data"
+    }
+  ],
+  "paths": {
+    "/api/proxy/anthropic/subscription/": {
+      "get": {
+        "tags": ["usage"],
+        "summary": "Get Anthropic subscription usage",
+        "description": "Returns usage data for Anthropic subscription users (Claude Max, etc.) across 5-hour and 7-day windows, Opus-specific usage, and extra usage credits. Responses should be cached by implementations and gracefully degrade when the upstream endpoint is unavailable.",
+        "operationId": "getAnthropicSubscriptionUsage",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Usage data (may be stale — check `meta.rate_limited`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                },
+                "examples": {
+                  "fresh": {
+                    "$ref": "#/components/examples/FreshUsage"
+                  },
+                  "stale": {
+                    "$ref": "#/components/examples/StaleUsage"
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Upstream Anthropic API failure and no cached data available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "examples": {
+                  "upstreamFailure": {
+                    "$ref": "#/components/examples/UpstreamFailure"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Anthropic credentials configured on the proxy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "examples": {
+                  "noCredentials": {
+                    "$ref": "#/components/examples/NoCredentials"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/proxy/anthropic/api-key/": {
+      "get": {
+        "tags": ["usage"],
+        "summary": "Get Anthropic API key usage",
+        "description": "Planned. Will return usage data for Anthropic API key users via the official /v1/usage endpoint.",
+        "operationId": "getAnthropicApiKeyUsage",
+        "security": [],
+        "responses": {
+          "501": {
+            "description": "Not yet implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "examples": {
+                  "notImplemented": {
+                    "summary": "Endpoint not yet implemented",
+                    "value": {
+                      "type": "about:blank",
+                      "title": "Not Implemented",
+                      "status": 501,
+                      "detail": "API key usage endpoint is not yet implemented"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "UsageWindow": {
+        "type": "object",
+        "required": ["utilization", "resets_at"],
+        "properties": {
+          "utilization": {
+            "type": "number",
+            "description": "Usage as percentage (0–100)",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "resets_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 UTC timestamp when the window resets"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExtraUsage": {
+        "type": "object",
+        "required": ["is_enabled", "utilization", "used_credits", "monthly_limit"],
+        "properties": {
+          "is_enabled": {
+            "type": "boolean",
+            "description": "Whether extra usage billing is active"
+          },
+          "utilization": {
+            "type": ["number", "null"],
+            "description": "Extra usage percentage",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "used_credits": {
+            "type": "number",
+            "description": "Dollar amount of credits consumed this month",
+            "minimum": 0
+          },
+          "monthly_limit": {
+            "type": "number",
+            "description": "Dollar cap for extra usage this month",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "Meta": {
+        "type": "object",
+        "required": ["source", "rate_limited", "last_updated"],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Data source identifier. New values may be added in future versions.",
+            "enum": ["anthropic_subscription"]
+          },
+          "rate_limited": {
+            "type": "boolean",
+            "description": "true when serving stale cached data (upstream was unreachable or rate-limited)"
+          },
+          "last_updated": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 UTC timestamp of the last successful upstream fetch"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UsageResponse": {
+        "type": "object",
+        "required": ["five_hour", "seven_day", "seven_day_opus", "extra_usage", "meta"],
+        "properties": {
+          "five_hour": {
+            "$ref": "#/components/schemas/UsageWindow"
+          },
+          "seven_day": {
+            "$ref": "#/components/schemas/UsageWindow"
+          },
+          "seven_day_opus": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/UsageWindow" },
+              { "type": "null" }
+            ],
+            "description": "Opus-specific 7-day window. Null if not applicable."
+          },
+          "extra_usage": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/ExtraUsage" },
+              { "type": "null" }
+            ],
+            "description": "Extra/overuse credits info. Null if not enabled."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "description": "Error response following RFC 9457 Problem Details",
+        "required": ["type", "title", "status"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "URI identifying the problem type"
+          },
+          "title": {
+            "type": "string",
+            "description": "Short, human-readable summary of the problem"
+          },
+          "status": {
+            "type": "integer",
+            "description": "HTTP status code"
+          },
+          "detail": {
+            "type": "string",
+            "description": "Human-readable explanation specific to this occurrence"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "examples": {
+      "FreshUsage": {
+        "summary": "Fresh usage data",
+        "value": {
+          "five_hour": {
+            "utilization": 28.0,
+            "resets_at": "2026-03-08T03:00:00.415663+00:00"
+          },
+          "seven_day": {
+            "utilization": 30.0,
+            "resets_at": "2026-03-13T03:00:00.415677+00:00"
+          },
+          "seven_day_opus": {
+            "utilization": 0.0,
+            "resets_at": "2026-03-13T03:00:00.415677+00:00"
+          },
+          "extra_usage": {
+            "is_enabled": true,
+            "utilization": 0.0,
+            "used_credits": 0.0,
+            "monthly_limit": 7750
+          },
+          "meta": {
+            "source": "anthropic_subscription",
+            "rate_limited": false,
+            "last_updated": "2026-03-08T00:33:26Z"
+          }
+        }
+      },
+      "StaleUsage": {
+        "summary": "Stale cached data (upstream unavailable)",
+        "value": {
+          "five_hour": {
+            "utilization": 28.0,
+            "resets_at": "2026-03-08T03:00:00.415663+00:00"
+          },
+          "seven_day": {
+            "utilization": 30.0,
+            "resets_at": "2026-03-13T03:00:00.415677+00:00"
+          },
+          "seven_day_opus": null,
+          "extra_usage": null,
+          "meta": {
+            "source": "anthropic_subscription",
+            "rate_limited": true,
+            "last_updated": "2026-03-07T22:15:00Z"
+          }
+        }
+      },
+      "UpstreamFailure": {
+        "summary": "Upstream API failure with no cached data",
+        "value": {
+          "type": "about:blank",
+          "title": "Bad Gateway",
+          "status": 502,
+          "detail": "Anthropic API returned 429 and no cached data is available"
+        }
+      },
+      "NoCredentials": {
+        "summary": "No credentials configured",
+        "value": {
+          "type": "about:blank",
+          "title": "Service Unavailable",
+          "status": 503,
+          "detail": "No Anthropic credentials configured"
+        }
+      }
+    }
+  }
+}
